@@ -76,7 +76,7 @@ def mitre():
         return
 
     mitre = Attck(
-        nested_subtechniques=True,
+        nested_techniques=True,
         use_config=False,
         save_config=False,
         config_file_path=os.path.join(CUCKOO_ROOT, "data", "mitre", "config.yml"),
@@ -86,7 +86,6 @@ def mitre():
         mobile_attck_json="https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json",
         ics_attck_json="https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json",
         nist_controls_json="https://raw.githubusercontent.com/center-for-threat-informed-defense/attack-control-framework-mappings/master/frameworks/ATT%26CK-v9.0/nist800-53-r4/stix/nist800-53-r4-controls.json",
-        generated_attck_json="https://swimlane-pyattck.s3.us-west-2.amazonaws.com/generated_attck_data.json",
         generated_nist_json="https://swimlane-pyattck.s3.us-west-2.amazonaws.com/attck_to_nist_controls.json",
     )
 
@@ -129,6 +128,7 @@ def install(enabled, force, rewrite, filepath, access_token=None, proxy=False):
         "machinery": "modules/machinery",
         "analyzer": "analyzer",
         "data": "data",
+        "integrations": "lib/cuckoo/common/integrations",
     }
 
     members = t.getmembers()
@@ -198,6 +198,7 @@ def main():
     parser.add_argument("-r", "--reporting", help="Download reporting modules", action="store_true", required=False)
     parser.add_argument("-an", "--analyzer", help="Download analyzer modules/binaries/etc", action="store_true", required=False)
     parser.add_argument("-data", "--data", help="Download data items", action="store_true", required=False)
+    parser.add_argument("-i", "--integrations", help="Download integration items", action="store_true", required=False)
     parser.add_argument(
         "-f", "--force", help="Install files without confirmation", action="store_true", default=False, required=False
     )
@@ -223,7 +224,7 @@ def main():
     enabled = []
 
     if args.all:
-        enabled = ["feeds", "processing", "signatures", "reporting", "machinery", "analyzer", "data"]
+        enabled = ["feeds", "processing", "signatures", "reporting", "machinery", "analyzer", "data", "integrations"]
         flare_capa()
     else:
         if args.feeds:
@@ -240,6 +241,8 @@ def main():
             enabled.append("analyzer")
         if args.data:
             enabled.append("data")
+        if args.integrations:
+            enabled.append("integrations")
 
     if args.capa_rules:
         flare_capa(args.proxy)

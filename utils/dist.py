@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from itertools import combinations
 from logging import handlers
+from urllib.parse import urlparse
 
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -37,7 +38,8 @@ sys.path.append(CUCKOO_ROOT)
 
 from lib.cuckoo.common.config import Config
 from lib.cuckoo.common.dist_db import ExitNodes, Machine, Node, Task, create_session
-from lib.cuckoo.common.path_utils import path_delete, path_exists, path_get_size, path_mkdir, path_write_file
+from lib.cuckoo.common.path_utils import path_delete, path_exists, path_get_size, path_mkdir, path_mount_point, path_write_file
+from lib.cuckoo.common.socket_utils import send_socket_command
 from lib.cuckoo.common.utils import get_options
 from lib.cuckoo.core.database import (
     TASK_BANNED,
@@ -55,8 +57,7 @@ dist_conf = Config("distributed")
 
 HAVE_GCP = False
 if dist_conf.GCP.enabled:
-    from lib.cuckoo.common.gcp import HAVE_GCP
-    from lib.cuckoo.common.gcp import autodiscovery as gcp_autodiscovery
+    from lib.cuckoo.common.gcp import HAVE_GCP, autodiscovery
 
 # we need original db to reserve ID in db,
 # to store later report, from master or worker
@@ -73,8 +74,7 @@ logging.getLogger("elasticsearch").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-# Move to config
-dist_ignore_patterns = shutil.ignore_patterns("binary", "dump_sorted.pcap", "memory.dmp", "logs")
+dist_ignore_patterns = shutil.ignore_patterns(*[pattern.strip() for pattern in dist_conf.distributed.ignore_patterns.split(",")])
 STATUSES = {}
 ID2NAME = {}
 SERVER_TAGS = {}
@@ -190,9 +190,16 @@ def node_get_report(task_id, fmt, url, apikey, stream=False):
         log.critical("Error fetching report (task #%d, node %s): %s", task_id, url, e)
 
 
-def node_get_report_nfs(task_id, worker_name, main_task_id):
+def node_get_report_nfs(task_id, worker_name, main_task_id) -> bool:
 
-    worker_path = os.path.join("/mnt", f"cape_worker_{worker_name}", "storage", "analyses", str(task_id))
+    worker_path = os.path.join(CUCKOO_ROOT, dist_conf.NFS.mount_folder, str(worker_name))
+
+    if not path_mount_point(worker_path):
+        log.error(f"[-] Worker: {worker_name} is not mounted to: {worker_path}!")
+        return True
+
+    worker_path = os.path.join(worker_path, "storage", "analyses", str(task_id))
+
     if not path_exists(worker_path):
         log.error(f"File on destiny doesn't exist: {worker_path}")
         return True
@@ -376,7 +383,8 @@ class Retriever(threading.Thread):
         self.threads = []
 
         if dist_conf.GCP.enabled and HAVE_GCP:
-            thread = threading.Thread(target=gcp_autodiscovery, name="GCP_autodiscovery", args=())
+            # autodiscovery is generic name so in case if we have AWS or Azure it should implement the logic inside
+            thread = threading.Thread(target=autodiscovery, name="autodiscovery", args=())
             thread.daemon = True
             thread.start()
             self.threads.append(thread)
@@ -610,7 +618,7 @@ class Retriever(threading.Thread):
                     continue
 
                 log.debug(
-                    "Fetching dist report for: id: {}, task_id: {}, main_task_id:{} from node: {}".format(
+                    "Fetching dist report for: id: {}, task_id: {}, main_task_id: {} from node: {}".format(
                         t.id, t.task_id, t.main_task_id, ID2NAME[t.node_id] if t.node_id in ID2NAME else t.node_id
                     )
                 )
@@ -727,7 +735,7 @@ class Retriever(threading.Thread):
 
                 report_path = os.path.join(CUCKOO_ROOT, "storage", "analyses", "{}".format(t.main_task_id))
                 if not path_exists(report_path):
-                    path_mkdir(report_path, mode=0o777)
+                    path_mkdir(report_path, mode=0o755)
                 try:
                     if report.content:
                         # with pyzipper.AESZipFile(BytesIO(report.content)) as zf:
@@ -1203,6 +1211,12 @@ class NodeRootApi(NodeBaseApi):
         db.add(node)
         db.commit()
         db.close()
+
+        if NFS_FETCH:
+            # Add entry to /etc/fstab, create folder and mount server
+            hostname = urlparse(args["url"]).netloc.split(":")[0]
+            send_socket_command(dist_conf.NFS.fstab_socket, "add_entry", [hostname, args["name"]], {})
+
         return dict(name=args["name"], machines=machines, exitnodes=exitnodes)
 
 
